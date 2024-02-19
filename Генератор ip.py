@@ -9,7 +9,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Генератор IP-адресов")
-        self.resize(600, 300)  
+        self.resize(700, 350)  
         self.init_ui()
 
     def init_ui(self):
@@ -19,6 +19,10 @@ class MainWindow(QWidget):
         self.ip_label = QLabel("", self)
         self.ip_label.setAlignment(Qt.AlignCenter)
         self.ip_label.setStyleSheet("font-size: 28px;")  
+
+        self.num_addresses_label = QLabel("", self)
+        self.num_addresses_label.setAlignment(Qt.AlignCenter)
+        self.num_addresses_label.setStyleSheet("font-size: 18px;")  
 
         self.ipv4_button = QPushButton("IPv4", self)  
         self.ipv4_button.setStyleSheet("background-color: #485563; color: white; border-radius: 10px;")
@@ -39,6 +43,7 @@ class MainWindow(QWidget):
 
         layout = QVBoxLayout()
         layout.addWidget(self.ip_label)
+        layout.addWidget(self.num_addresses_label)
         layout.addLayout(button_layout)
         self.setLayout(layout)
 
@@ -50,13 +55,15 @@ class MainWindow(QWidget):
             octet4 = 0
             netmask = random.randint(1, 31)
             ip = f"{octet1}.{octet2}.{octet3}.{octet4}/{netmask}"
+            num_addresses = 2**(32 - netmask)
         else:
-            ipv6 = ipaddress.IPv6Address(random.getrandbits(128))
-            subnet = ipv6.exploded
             netmask = random.randint(1, 127)
-            ip = f"{subnet}/{netmask}"
-            
+            subnet = ":".join([format(random.randint(0, 65535), 'x') for _ in range(7)])
+            ip = f"{subnet}:0/{netmask}"
+            num_addresses = 2**(128 - netmask)
+       
         self.ip_label.setText(ip)
+        self.num_addresses_label.setText(f"Количество адресов: {num_addresses}")
 
     def copy_ip(self):
         ip_text = self.ip_label.text()
