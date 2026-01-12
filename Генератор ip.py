@@ -1,11 +1,12 @@
 import sys
 import random
 import ipaddress
+import math
 
 from PyQt5.QtCore import Qt, QTimer, QRectF
 from PyQt5.QtGui import (
     QPainter, QColor, QPen, QBrush,
-    QLinearGradient, QRadialGradient, QFont
+    QLinearGradient, QRadialGradient
 )
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
@@ -13,12 +14,11 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect
 )
 
-
 I18N = {
     "ru": {
         "window_title": "Генератор IP-адресов",
         "title": "IP / Subnet Generator",
-        "hint": "IPv4/IPv6 — выбирает режим. «Сгенерировать» — обновляет сеть.",
+        "hint": "1/2 — IPv4/IPv6 • G — сгенерировать • C — копировать • R/E — язык • Esc — выход",
         "btn_generate": "Сгенерировать",
         "btn_copy": "Копировать",
         "btn_copied": "Скопировано ✓",
@@ -27,11 +27,12 @@ I18N = {
         "badge_mode_v4": "MODE: IPv4",
         "badge_mode_v6": "MODE: IPv6",
         "badge_lang": "LANG",
+        "status": "STATUS: ONLINE",
     },
     "en": {
         "window_title": "IP Address Generator",
         "title": "IP / Subnet Generator",
-        "hint": "IPv4/IPv6 selects mode. “Generate” refreshes the network.",
+        "hint": "1/2 — IPv4/IPv6 • G — generate • C — copy • R/E — language • Esc — exit",
         "btn_generate": "Generate",
         "btn_copy": "Copy",
         "btn_copied": "Copied ✓",
@@ -40,28 +41,32 @@ I18N = {
         "badge_mode_v4": "MODE: IPv4",
         "badge_mode_v6": "MODE: IPv6",
         "badge_lang": "LANG",
+        "status": "STATUS: ONLINE",
     }
 }
 
-
 QSS = """
-/* Base */
-QWidget {
-    color: #EAF6FF;
-    font-family: Inter, Segoe UI, Arial;
-}
+QWidget { color: #EAF6FF; font-family: Inter, Segoe UI, Arial; }
 
-/* Neon Card */
-QFrame#NeonCard {
-    background: rgba(14, 20, 40, 0.62);
-    border-radius: 18px;
-}
+/* Card */
+QFrame#NeonCard { background: rgba(14, 20, 40, 0.62); border-radius: 18px; }
 
-/* Typography */
-QLabel#Title { font-size: 16px; font-weight: 800; letter-spacing: 0.4px; }
+/* Top bar */
+QFrame#TopBar {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+}
+QLabel#TopText {
+    font-size: 11px;
+    color: rgba(234,246,255,0.80);
+    letter-spacing: 0.9px;
+    font-weight: 700;
+}
+QLabel#Title { font-size: 16px; font-weight: 900; letter-spacing: 0.6px; }
 QLabel#Hint  { font-size: 11px; color: rgba(234,246,255,0.70); }
-QLabel#IP    { font-size: 30px; font-weight: 900; letter-spacing: 1px; }
-QLabel#IP    { font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace; }
+QLabel#IP    { font-size: 30px; font-weight: 900; letter-spacing: 1px;
+              font-family: "JetBrains Mono","Cascadia Mono","Consolas",monospace; }
 QLabel#Meta  { font-size: 12px; color: rgba(234,246,255,0.85); }
 
 /* Badges */
@@ -72,15 +77,15 @@ QLabel#Badge {
     border: 1px solid rgba(0, 255, 240, 0.22);
     color: rgba(234,246,255,0.92);
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 800;
     letter-spacing: 0.8px;
 }
 
-/* Buttons base */
+/* Buttons */
 QPushButton {
     padding: 10px 14px;
     border-radius: 12px;
-    font-weight: 700;
+    font-weight: 800;
     letter-spacing: 0.6px;
     background: rgba(0, 255, 240, 0.06);
     border: 1px solid rgba(0, 255, 240, 0.18);
@@ -95,14 +100,14 @@ QPushButton:pressed {
     border: 1px solid rgba(0, 255, 240, 0.14);
 }
 
-/* Segmented (IPv4/IPv6, RU/EN) */
+/* Seg */
 QPushButton#Seg { padding: 9px 12px; }
 QPushButton#Seg[active="true"] {
     background: rgba(0, 255, 240, 0.14);
     border: 1px solid rgba(0, 255, 240, 0.50);
 }
 
-/* Primary Neon (Copy) */
+/* Primary (Copy) */
 QPushButton#Primary {
     background: rgba(92, 120, 255, 0.20);
     border: 1px solid rgba(92, 120, 255, 0.55);
@@ -112,7 +117,7 @@ QPushButton#Primary:hover {
     border: 1px solid rgba(92, 120, 255, 0.70);
 }
 
-/* Accent Neon (Generate) */
+/* Accent (Generate) */
 QPushButton#Accent {
     background: rgba(255, 0, 214, 0.14);
     border: 1px solid rgba(255, 0, 214, 0.55);
@@ -123,12 +128,42 @@ QPushButton#Accent:hover {
 }
 """
 
-
 def count_usable_ipv4(net: ipaddress.IPv4Network) -> int:
     if net.prefixlen >= 31:
         return net.num_addresses
     return max(0, net.num_addresses - 2)
 
+class PulseDot(QWidget):
+    """Пульсирующая точка-индикатор."""
+    def __init__(self, color: QColor, parent=None):
+        super().__init__(parent)
+        self.base = color
+        self.phase = 0.0
+        self.setFixedSize(12, 12)
+
+    def set_phase(self, phase: float):
+        self.phase = phase
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        # 0..1
+        t = (math.sin(self.phase) + 1.0) / 2.0
+        glow_alpha = int(35 + 70 * t)
+        core_alpha = int(160 + 70 * t)
+
+        r = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+
+        # glow
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(self.base.red(), self.base.green(), self.base.blue(), glow_alpha))
+        p.drawEllipse(r.adjusted(-2.5, -2.5, 2.5, 2.5))
+
+        # core
+        p.setBrush(QColor(self.base.red(), self.base.green(), self.base.blue(), core_alpha))
+        p.drawEllipse(r)
 
 class NeonCard(QFrame):
     """Карточка со светящейся неоновой рамкой."""
@@ -144,31 +179,23 @@ class NeonCard(QFrame):
         r = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
         radius = 18.0
 
-        # Neon gradient border
         g = QLinearGradient(r.topLeft(), r.bottomRight())
         g.setColorAt(0.0, QColor(0, 255, 240, 180))
         g.setColorAt(0.5, QColor(92, 120, 255, 170))
         g.setColorAt(1.0, QColor(255, 0, 214, 160))
 
+        # soft glow strokes
+        p.setPen(QPen(QColor(0, 255, 240, 28), 6.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawRoundedRect(r, radius, radius)
+        p.setPen(QPen(QColor(255, 0, 214, 22), 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawRoundedRect(r, radius, radius)
+
+        # crisp border
         pen = QPen(QBrush(g), 1.6)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
-
-        # Outer glow (draw a couple of soft strokes)
-        glow_pen = QPen(QBrush(g), 6.0)
-        glow_pen.setColor(QColor(0, 255, 240, 35))
-        p.setPen(glow_pen)
-        p.drawRoundedRect(r, radius, radius)
-
-        glow_pen2 = QPen(QBrush(g), 3.0)
-        glow_pen2.setColor(QColor(255, 0, 214, 28))
-        p.setPen(glow_pen2)
-        p.drawRoundedRect(r, radius, radius)
-
-        # Crisp border
         p.setPen(pen)
         p.drawRoundedRect(r, radius, radius)
-
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -183,8 +210,13 @@ class MainWindow(QWidget):
         self._copied_timer.setSingleShot(True)
         self._copied_timer.timeout.connect(self._reset_copy_button)
 
+        self._anim_phase = 0.0
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._tick_anim)
+        self._anim_timer.start(40)
+
         self.setStyleSheet(QSS)
-        self.resize(860, 460)
+        self.resize(900, 500)
 
         self.build_ui()
         self.set_language(self.lang)
@@ -194,38 +226,33 @@ class MainWindow(QWidget):
         return I18N[self.lang][key]
 
     # Futuristic background
-    def paintEvent(self, event):
+    def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-
         rect = self.rect()
 
-        # Base gradient
         bg = QLinearGradient(rect.topLeft(), rect.bottomRight())
         bg.setColorAt(0.0, QColor(6, 10, 24))
         bg.setColorAt(0.55, QColor(10, 14, 34))
         bg.setColorAt(1.0, QColor(4, 8, 20))
         p.fillRect(rect, bg)
 
-        # Radial glow
         rg = QRadialGradient(rect.center(), rect.width() * 0.65)
-        rg.setColorAt(0.0, QColor(0, 255, 240, 28))
-        rg.setColorAt(0.6, QColor(92, 120, 255, 18))
+        rg.setColorAt(0.0, QColor(0, 255, 240, 26))
+        rg.setColorAt(0.6, QColor(92, 120, 255, 16))
         rg.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.fillRect(rect, rg)
 
-        # Grid
-        grid_pen = QPen(QColor(0, 255, 240, 18), 1)
-        p.setPen(grid_pen)
+        # grid
+        p.setPen(QPen(QColor(0, 255, 240, 16), 1))
         step = 28
         for x in range(0, rect.width(), step):
             p.drawLine(x, 0, x, rect.height())
         for y in range(0, rect.height(), step):
             p.drawLine(0, y, rect.width(), y)
 
-        # Scanlines
-        scan_pen = QPen(QColor(255, 255, 255, 10), 1)
-        p.setPen(scan_pen)
+        # scanlines
+        p.setPen(QPen(QColor(255, 255, 255, 9), 1))
         for y in range(0, rect.height(), 3):
             p.drawLine(0, y, rect.width(), y)
 
@@ -236,19 +263,55 @@ class MainWindow(QWidget):
 
         card = NeonCard(self)
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 20, 20, 20)
+        card_layout.setContentsMargins(18, 18, 18, 18)
         card_layout.setSpacing(12)
 
-        # Soft shadow under card
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(36)
-        shadow.setOffset(0, 16)
-        shadow.setColor(QColor(0, 0, 0, 160))
+        shadow.setBlurRadius(40)
+        shadow.setOffset(0, 18)
+        shadow.setColor(QColor(0, 0, 0, 170))
         card.setGraphicsEffect(shadow)
 
-        # Header row
-        top = QHBoxLayout()
-        top.setSpacing(10)
+        # --- TopBar (terminal-like) ---
+        topbar = QFrame(self)
+        topbar.setObjectName("TopBar")
+        topbar_l = QHBoxLayout(topbar)
+        topbar_l.setContentsMargins(12, 10, 12, 10)
+        topbar_l.setSpacing(10)
+
+        # left "window dots" (static look)
+        dots = QHBoxLayout()
+        dots.setSpacing(8)
+        self.dot_red = PulseDot(QColor(255, 80, 105), self)
+        self.dot_yel = PulseDot(QColor(255, 210, 90), self)
+        self.dot_grn = PulseDot(QColor(70, 255, 160), self)
+        dots.addWidget(self.dot_red)
+        dots.addWidget(self.dot_yel)
+        dots.addWidget(self.dot_grn)
+
+        self.top_text = QLabel("", self)
+        self.top_text.setObjectName("TopText")
+        self.top_text.setAlignment(Qt.AlignCenter)
+
+        # right status pulse (separate)
+        self.dot_net = PulseDot(QColor(0, 255, 240), self)
+        self.status_text = QLabel("", self)
+        self.status_text.setObjectName("TopText")
+
+        right = QHBoxLayout()
+        right.setSpacing(8)
+        right.addWidget(self.dot_net)
+        right.addWidget(self.status_text)
+
+        topbar_l.addLayout(dots)
+        topbar_l.addStretch(1)
+        topbar_l.addWidget(self.top_text)
+        topbar_l.addStretch(1)
+        topbar_l.addLayout(right)
+
+        # --- Header row (title + badges + lang buttons) ---
+        header = QHBoxLayout()
+        header.setSpacing(10)
 
         self.title_label = QLabel("", self)
         self.title_label.setObjectName("Title")
@@ -267,13 +330,13 @@ class MainWindow(QWidget):
         self.en_button.setObjectName("Seg")
         self.en_button.clicked.connect(lambda: self.set_language("en"))
 
-        top.addWidget(self.title_label)
-        top.addStretch(1)
-        top.addWidget(self.badge_mode)
-        top.addSpacing(6)
-        top.addWidget(self.badge_lang)
-        top.addWidget(self.ru_button)
-        top.addWidget(self.en_button)
+        header.addWidget(self.title_label)
+        header.addStretch(1)
+        header.addWidget(self.badge_mode)
+        header.addSpacing(6)
+        header.addWidget(self.badge_lang)
+        header.addWidget(self.ru_button)
+        header.addWidget(self.en_button)
 
         self.hint_label = QLabel("", self)
         self.hint_label.setObjectName("Hint")
@@ -286,7 +349,7 @@ class MainWindow(QWidget):
         self.meta_label.setObjectName("Meta")
         self.meta_label.setAlignment(Qt.AlignCenter)
 
-        # Controls row
+        # --- Controls row ---
         controls = QHBoxLayout()
         controls.setSpacing(10)
 
@@ -312,7 +375,8 @@ class MainWindow(QWidget):
         controls.addWidget(self.generate_button)
         controls.addWidget(self.copy_button)
 
-        card_layout.addLayout(top)
+        card_layout.addWidget(topbar)
+        card_layout.addLayout(header)
         card_layout.addWidget(self.hint_label)
         card_layout.addSpacing(4)
         card_layout.addWidget(self.ip_label)
@@ -324,6 +388,14 @@ class MainWindow(QWidget):
         root.addWidget(card)
         root.addStretch(1)
 
+    def _tick_anim(self):
+        self._anim_phase += 0.15
+        # разные фазы, чтобы не мигали одинаково
+        self.dot_red.set_phase(self._anim_phase + 0.0)
+        self.dot_yel.set_phase(self._anim_phase + 1.2)
+        self.dot_grn.set_phase(self._anim_phase + 2.4)
+        self.dot_net.set_phase(self._anim_phase + 0.7)
+
     def _refresh_btn(self, btn: QPushButton):
         btn.style().unpolish(btn)
         btn.style().polish(btn)
@@ -333,7 +405,6 @@ class MainWindow(QWidget):
         self.ipv6_button.setProperty("active", v == 6)
         self._refresh_btn(self.ipv4_button)
         self._refresh_btn(self.ipv6_button)
-
         self.badge_mode.setText(self.tr("badge_mode_v4") if v == 4 else self.tr("badge_mode_v6"))
 
     def _set_active_lang(self):
@@ -350,6 +421,8 @@ class MainWindow(QWidget):
         self.title_label.setText(self.tr("title"))
         self.hint_label.setText(self.tr("hint"))
         self.badge_lang.setText(self.tr("badge_lang"))
+        self.status_text.setText(self.tr("status"))
+        self.top_text.setText("NEURAL NET / IP CORE v2.1")  # просто “футуристичная” строка
 
         self.generate_button.setText(self.tr("btn_generate"))
         self._reset_copy_button()
@@ -360,15 +433,10 @@ class MainWindow(QWidget):
         if self._last_total is None:
             self.meta_label.setText("")
             return
-
         if self.current_version == 4:
-            self.meta_label.setText(
-                self.tr("meta_v4").format(total=self._last_total, usable=self._last_usable)
-            )
+            self.meta_label.setText(self.tr("meta_v4").format(total=self._last_total, usable=self._last_usable))
         else:
-            self.meta_label.setText(
-                self.tr("meta_v6").format(total=self._last_total)
-            )
+            self.meta_label.setText(self.tr("meta_v6").format(total=self._last_total))
 
     def generate_again(self):
         self.generate_ip(self.current_version)
@@ -410,6 +478,31 @@ class MainWindow(QWidget):
     def _reset_copy_button(self):
         self.copy_button.setText(self.tr("btn_copy"))
 
+    # Горячие клавиши
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k == Qt.Key_Escape:
+            self.close()
+            return
+        if k == Qt.Key_G:
+            self.generate_again()
+            return
+        if k == Qt.Key_C:
+            self.copy_ip()
+            return
+        if k == Qt.Key_1:
+            self.generate_ip(4)
+            return
+        if k == Qt.Key_2:
+            self.generate_ip(6)
+            return
+        if k == Qt.Key_R:
+            self.set_language("ru")
+            return
+        if k == Qt.Key_E:
+            self.set_language("en")
+            return
+        super().keyPressEvent(e)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
